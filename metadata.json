@@ -1,0 +1,6 @@
+{
+  "name": "Train World - Hành Trình Tàu Hỏa & Nông Trại",
+  "description": "Game quản lý vận hành đoàn tàu nông trại di chuyển giữa các nhà ga, sản xuất nông sản, giao thương, nâng cấp đầu máy và đồng bộ chu kỳ ngày đêm thời gian thực.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

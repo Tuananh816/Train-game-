@@ -1,0 +1,100 @@
+import { WeatherType, WeatherConfig } from '../types';
+
+export const WEATHER_CONFIGS: Record<WeatherType, WeatherConfig> = {
+  SUNNY: {
+    id: 'SUNNY',
+    name: 'Sunny',
+    vietnamese_title: 'Trời nắng',
+    icon: '☀️',
+    description: 'Trời sáng, có ánh nắng mặt trời chiếu rọi, nhiệt độ thường cao và tầm nhìn quang đãng.',
+    temperature_celsius: '28°C - 34°C',
+    humidity_percent: 45,
+    visibility: 'Rõ nét (> 15 km)',
+    wind_speed_kmh: 12,
+    unlock_hours_required: 0,
+  },
+  CLOUDY: {
+    id: 'CLOUDY',
+    name: 'Cloudy',
+    vietnamese_title: 'Trời có mây',
+    icon: '⛅',
+    description: 'Mây che phủ bầu trời, giảm bớt ánh nắng gay gắt và nhiệt độ dịu mát hơn.',
+    temperature_celsius: '24°C - 27°C',
+    humidity_percent: 62,
+    visibility: 'Tốt (10 - 12 km)',
+    wind_speed_kmh: 18,
+    unlock_hours_required: 2, // Mở khóa sau 2 tiếng chơi
+  },
+  RAINY: {
+    id: 'RAINY',
+    name: 'Rainy',
+    vietnamese_title: 'Trời mưa',
+    icon: '🌧️',
+    description: 'Nước rơi từ các đám mây xuống đất, có thể là mưa phùn, mưa rào hoặc mưa to trên đường ray.',
+    temperature_celsius: '21°C - 23°C',
+    humidity_percent: 88,
+    visibility: 'Trung bình (5 - 8 km)',
+    wind_speed_kmh: 26,
+    unlock_hours_required: 4, // Mở khóa sau 4 tiếng chơi
+  },
+  THUNDERSTORM: {
+    id: 'THUNDERSTORM',
+    name: 'Thunderstorm',
+    vietnamese_title: 'Dông bão',
+    icon: '⛈️',
+    description: 'Kiểu thời tiết có mưa lớn kèm theo sấm sét giật chớp lóe sáng bầu trời, gió giật mạnh.',
+    temperature_celsius: '19°C - 22°C',
+    humidity_percent: 95,
+    visibility: 'Kém (2 - 4 km)',
+    wind_speed_kmh: 48,
+    unlock_hours_required: 6, // Mở khóa sau 6 tiếng chơi
+  },
+  COLD: {
+    id: 'COLD',
+    name: 'Cold',
+    vietnamese_title: 'Trời lạnh & Tuyết',
+    icon: '❄️',
+    description: 'Nhiệt độ không khí xuống thấp, gây cảm giác rét buốt với những bông tuyết rơi lả tả bồng bềnh.',
+    temperature_celsius: '-2°C - 5°C',
+    humidity_percent: 70,
+    visibility: 'Mờ sương tuyết (4 - 6 km)',
+    wind_speed_kmh: 22,
+    unlock_hours_required: 8, // Mở khóa sau 8 tiếng chơi
+  },
+  FOGGY: {
+    id: 'FOGGY',
+    name: 'Foggy',
+    vietnamese_title: 'Sương mù',
+    icon: '🌫️',
+    description: 'Hơi nước ngưng tụ lơ lửng sát mặt đất, làm giảm tầm nhìn xa và tạo nên khung cảnh mờ ảo huyền bí.',
+    temperature_celsius: '14°C - 17°C',
+    humidity_percent: 98,
+    visibility: 'Rất hạn chế (< 1.5 km)',
+    wind_speed_kmh: 8,
+    unlock_hours_required: 10, // Mở khóa sau 10 tiếng chơi
+  },
+  METEOR_SHOWER: {
+    id: 'METEOR_SHOWER',
+    name: 'Meteor Shower',
+    vietnamese_title: 'Mưa Sao Băng',
+    icon: '🌠',
+    description: 'Hiện tượng thiên văn kỳ ảo vào ban đêm khi hàng chục vệt sao băng rực rỡ bay lướt qua bầu trời ngàn sao!',
+    temperature_celsius: '16°C - 20°C',
+    humidity_percent: 50,
+    visibility: 'Trong trẻo kỳ ảo (> 20 km)',
+    wind_speed_kmh: 10,
+    unlock_hours_required: 12,
+    special_condition: 'Mở khóa đặc biệt khi người chơi chơi vào lúc 9h buổi tối (21:00) hoặc tích lũy đủ 12 giờ chơi!',
+    is_special: true,
+  },
+};
+
+export const WEATHER_UNLOCK_ORDER: WeatherType[] = [
+  'SUNNY',
+  'CLOUDY',
+  'RAINY',
+  'THUNDERSTORM',
+  'COLD',
+  'FOGGY',
+  'METEOR_SHOWER',
+];

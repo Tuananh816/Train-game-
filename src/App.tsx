@@ -1,0 +1,847 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  PlayerProfile,
+  TrainState,
+  Station,
+  TimeSyncMode,
+  CarTypeId,
+  JourneyStats,
+  WeatherType,
+  WeatherSelectionMode,
+} from './types';
+import {
+  ENGINE_CONFIGS,
+  WHEELS_CONFIGS,
+  HULL_CONFIGS,
+  CAR_CONFIGS,
+  STATIONS,
+  ITEMS,
+} from './data/gameConfig';
+import { WEATHER_CONFIGS, WEATHER_UNLOCK_ORDER } from './data/weatherConfig';
+import { loadGameSave, saveGameData } from './utils/storage';
+import { calculateTimeState } from './utils/timeEngine';
+import { audioSynthesizer } from './utils/audioSynthesizer';
+import { TrainCanvas } from './components/TrainCanvas';
+import { HUD } from './components/HUD';
+import { StationModal } from './components/StationModal';
+import { CargoSheet } from './components/CargoSheet';
+import { TimeSettingsModal } from './components/TimeSettingsModal';
+import { WeatherModal } from './components/WeatherModal';
+import { EmergencyModal } from './components/EmergencyModal';
+
+export default function App() {
+  // -------------------------------------------------------------
+  // Initial State Loading
+  // -------------------------------------------------------------
+  const [saveData] = useState(() => loadGameSave());
+
+  const [playerProfile, setPlayerProfile] = useState<PlayerProfile>(saveData.player_profile);
+  const [stations, setStations] = useState<Station[]>(STATIONS);
+  const [currentStationIndex, setCurrentStationIndex] = useState<number>(
+    saveData.player_profile.current_station_index || 0
+  );
+
+  const [timeMode, setTimeMode] = useState<TimeSyncMode>(saveData.time_mode || 'REALTIME');
+  const [manualHour, setManualHour] = useState<number>(saveData.manual_hour ?? 12);
+  const [fastForwardSeconds, setFastForwardSeconds] = useState<number>(0);
+
+  // Weather System State
+  const [totalPlayTimeSeconds, setTotalPlayTimeSeconds] = useState<number>(
+    saveData.total_playtime_seconds || 0
+  );
+  const [unlockedWeathers, setUnlockedWeathers] = useState<WeatherType[]>(
+    saveData.unlocked_weathers && saveData.unlocked_weathers.length > 0
+      ? saveData.unlocked_weathers
+      : ['SUNNY']
+  );
+  const [activeWeather, setActiveWeather] = useState<WeatherType>(
+    saveData.active_weather || 'SUNNY'
+  );
+  const [weatherMode, setWeatherMode] = useState<WeatherSelectionMode>(
+    saveData.weather_mode || 'AUTO'
+  );
+  const [weatherUnlockToast, setWeatherUnlockToast] = useState<{
+    name: string;
+    icon: string;
+    desc: string;
+  } | null>(null);
+
+  // Derive initial target distance
+  const initialNextStation = STATIONS[currentStationIndex + 1] || STATIONS[1];
+  const initialCurrentStation = STATIONS[currentStationIndex] || STATIONS[0];
+  const initialDistanceToNext = initialNextStation.distance_from_start_km - initialCurrentStation.distance_from_start_km;
+
+  const [trainState, setTrainState] = useState<TrainState>(() => {
+    const engCfg = ENGINE_CONFIGS[saveData.train_state.engine_level || 1];
+    const hullCfg = HULL_CONFIGS[saveData.train_state.hull_level || 1];
+
+    // Compute initial weight
+    let initialWeight = 20; // Locomotive base
+    saveData.train_state.car_list.forEach((c) => {
+      const cfg = CAR_CONFIGS[c.car_type_id];
+      initialWeight += cfg?.empty_weight_tons || 8;
+      if (c.cargo_inventory) {
+        Object.values(c.cargo_inventory).forEach((w) => {
+          initialWeight += (Number(w) || 0) / 1000;
+        });
+      }
+    });
+
+    const isFirstTime = (saveData.player_profile.trips_completed || 0) === 0;
+
+    return {
+      engine_level: saveData.train_state.engine_level || 1,
+      wheels_level: saveData.train_state.wheels_level || 1,
+      hull_level: saveData.train_state.hull_level || 1,
+      current_fuel: saveData.train_state.current_fuel ?? engCfg.max_fuel,
+      max_fuel: engCfg.max_fuel,
+      current_hp: saveData.train_state.current_hp ?? hullCfg.max_hp,
+      max_hp: hullCfg.max_hp,
+      speed_kmh: 0,
+      target_speed_kmh: 0,
+      throttle: 1.0, // Running by default
+      car_list: saveData.train_state.car_list,
+      is_at_station: isFirstTime,
+      distance_to_next_station_km: initialDistanceToNext,
+      total_weight_tons: initialWeight,
+    };
+  });
+
+  const [stageStats, setStageStats] = useState<JourneyStats>(saveData.journey_stats);
+  const [isMuted, setIsMuted] = useState<boolean>(false);
+
+  // Modals - Open station modal at start if at origin
+  const [showStationModal, setShowStationModal] = useState<boolean>(
+    () => (saveData.player_profile.trips_completed || 0) === 0
+  );
+  const [showCargoSheet, setShowCargoSheet] = useState<boolean>(false);
+  const [showTimeModal, setShowTimeModal] = useState<boolean>(false);
+  const [showWeatherModal, setShowWeatherModal] = useState<boolean>(false);
+  const [showEmergencyModal, setShowEmergencyModal] = useState<boolean>(false);
+
+  const lastTickTimeRef = useRef<number>(Date.now());
+
+  // -------------------------------------------------------------
+  // Current Station and Next Station pointers
+  // -------------------------------------------------------------
+  const currentStation = stations[currentStationIndex] || stations[0];
+  const nextStation = stations[currentStationIndex + 1] || {
+    station_id: `ST_${currentStationIndex + 2}`,
+    station_name: `Trạm Tuyến Mới Km ${currentStation.distance_from_start_km + 30}`,
+    distance_from_start_km: currentStation.distance_from_start_km + 30,
+    market_prices: {
+      potato: 8.0 + Math.random() * 8,
+      egg: 16.0 + Math.random() * 12,
+      bio_fuel: 10.0 + Math.random() * 10,
+      passenger_ticket: 20.0 + Math.random() * 20,
+    },
+    fuel_refill_price_per_unit: 2.5 + Math.random() * 1.5,
+    repair_price_per_hp: 2.0 + Math.random() * 1.0,
+    description: 'Trạm ga trên tuyến đường sắt mới mở rộng.',
+    biome: 'plains',
+  };
+
+  const stageTotalDistance = Math.max(1, nextStation.distance_from_start_km - currentStation.distance_from_start_km);
+  const progressToNext = Math.max(0, Math.min(1, 1 - trainState.distance_to_next_station_km / stageTotalDistance));
+
+  // Time & Weather state computation
+  const timeState = calculateTimeState(
+    timeMode,
+    fastForwardSeconds,
+    manualHour,
+    activeWeather,
+    unlockedWeathers,
+    weatherMode,
+    totalPlayTimeSeconds
+  );
+
+  // Synchronize active weather if weather mode is AUTO
+  useEffect(() => {
+    if (weatherMode === 'AUTO' && timeState.activeWeather !== activeWeather) {
+      setActiveWeather(timeState.activeWeather);
+    }
+  }, [weatherMode, timeState.activeWeather, activeWeather]);
+
+  // -------------------------------------------------------------
+  // Calculate aggregated cargo metrics
+  // -------------------------------------------------------------
+  let totalCargoKg = 0;
+  let maxCargoCapacityKg = 0;
+  let totalPassengers = 0;
+
+  trainState.car_list.forEach((car) => {
+    if (car.car_type_id === 'STORAGE') {
+      const cfg = CAR_CONFIGS['STORAGE'];
+      maxCargoCapacityKg += cfg.max_capacity_kg;
+      if (car.cargo_inventory) {
+        Object.values(car.cargo_inventory).forEach((w) => {
+          totalCargoKg += Number(w) || 0;
+        });
+      }
+    }
+    if (car.car_type_id === 'PASSENGER') {
+      totalPassengers += car.passengers_count || 0;
+    }
+  });
+
+  // -------------------------------------------------------------
+  // Core Game Loop Simulation (Tick every 60ms)
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const dt = Math.min((now - lastTickTimeRef.current) / 1000, 0.5);
+      lastTickTimeRef.current = now;
+
+      // 1. Playtime accumulation & Weather Unlocking
+      setTotalPlayTimeSeconds((prevPlayTime) => {
+        const nextPlayTime = prevPlayTime + dt;
+
+        // Check Playtime Unlocks (Every 2 hours = 7200s per tier)
+        const earnedTierCount = Math.min(
+          WEATHER_UNLOCK_ORDER.length,
+          1 + Math.floor(nextPlayTime / 7200)
+        );
+
+        setUnlockedWeathers((prevUnlocked) => {
+          let updatedUnlocked = [...prevUnlocked];
+          let newlyUnlockedName: string | null = null;
+          let newlyUnlockedIcon: string | null = null;
+          let newlyUnlockedDesc: string | null = null;
+
+          // Check standard 2-hour progressive unlocks
+          for (let i = 0; i < earnedTierCount; i++) {
+            const wType = WEATHER_UNLOCK_ORDER[i];
+            if (!updatedUnlocked.includes(wType)) {
+              updatedUnlocked.push(wType);
+              const cfg = WEATHER_CONFIGS[wType];
+              newlyUnlockedName = cfg.name;
+              newlyUnlockedIcon = cfg.icon;
+              newlyUnlockedDesc = cfg.description;
+            }
+          }
+
+          // Check Special 9 PM (21:00) condition for Meteor Shower
+          const currentRealHour = new Date().getHours();
+          const isAt9PM = currentRealHour === 21 || manualHour === 21;
+          if (isAt9PM && !updatedUnlocked.includes('METEOR_SHOWER')) {
+            updatedUnlocked.push('METEOR_SHOWER');
+            const cfg = WEATHER_CONFIGS['METEOR_SHOWER'];
+            newlyUnlockedName = cfg.name;
+            newlyUnlockedIcon = cfg.icon;
+            newlyUnlockedDesc = 'Mở khóa đặc biệt khi lái tàu lúc 9 giờ tối!';
+          }
+
+          if (newlyUnlockedName) {
+            audioSynthesizer.playChimeSuccess();
+            setWeatherUnlockToast({
+              name: newlyUnlockedName,
+              icon: newlyUnlockedIcon || '✨',
+              desc: newlyUnlockedDesc || 'Kiểu thời tiết mới đã sẵn sàng!',
+            });
+            setTimeout(() => setWeatherUnlockToast(null), 6000);
+          }
+
+          return updatedUnlocked;
+        });
+
+        return nextPlayTime;
+      });
+
+      // Update Fast-forward timer if enabled
+      if (timeMode === 'FAST_FORWARD') {
+        setFastForwardSeconds((prev) => prev + dt);
+      }
+
+      setTrainState((prev) => {
+        // If at station, train is stationary
+        if (prev.is_at_station) {
+          return { ...prev, speed_kmh: 0 };
+        }
+
+        const engineCfg = ENGINE_CONFIGS[prev.engine_level];
+        const wheelsCfg = WHEELS_CONFIGS[prev.wheels_level];
+        const hullCfg = HULL_CONFIGS[prev.hull_level];
+
+        // 1. Calculate weight
+        let weight = 20; // Locomotive
+        prev.car_list.forEach((c) => {
+          const cfg = CAR_CONFIGS[c.car_type_id];
+          weight += cfg?.empty_weight_tons || 8;
+          if (c.cargo_inventory) {
+            Object.values(c.cargo_inventory).forEach((w) => {
+              weight += (Number(w) || 0) / 1000;
+            });
+          }
+        });
+
+        // 2. Weight load penalty (if weight > max_weight_tons)
+        const weightRatio = Math.max(1, weight / engineCfg.max_weight_tons);
+        const effectiveMaxSpeed = engineCfg.max_speed_kmh / (weightRatio > 1.2 ? 1.4 : 1.0);
+
+        // Check if out of fuel or broken down
+        const canRun = prev.current_fuel > 0.1 && prev.current_hp > 0 && prev.throttle > 0;
+
+        // 3. Accelerate / Decelerate
+        let newSpeed = prev.speed_kmh;
+        if (canRun) {
+          // Check if the train is currently departing and clearing the station platform
+          const distFromStationKm = stageTotalDistance - prev.distance_to_next_station_km;
+          const isClearingStation = distFromStationKm < 0.12; // First 120m alongside station platform
+          const departureCrawlingSpeed = 16.0; // km/h steady platform departure rollout speed
+
+          if (isClearingStation) {
+            // Hold constant steady departure speed (~16 km/h) while moving along platform
+            const targetDepartureSpeed = Math.min(departureCrawlingSpeed, effectiveMaxSpeed);
+            const accel = 14.0;
+            if (prev.speed_kmh < targetDepartureSpeed) {
+              newSpeed = Math.min(targetDepartureSpeed, prev.speed_kmh + accel * dt);
+            } else if (prev.speed_kmh > targetDepartureSpeed) {
+              newSpeed = Math.max(targetDepartureSpeed, prev.speed_kmh - 8.0 * dt);
+            } else {
+              newSpeed = targetDepartureSpeed;
+            }
+          } else {
+            // Once the station is completely passed, accelerate smoothly and progressively to cruising speed!
+            const accel = wheelsCfg.acceleration;
+            newSpeed = Math.min(effectiveMaxSpeed, prev.speed_kmh + accel * dt);
+          }
+        } else {
+          // Coasting deceleration
+          const decel = 8.0;
+          newSpeed = Math.max(0, prev.speed_kmh - decel * dt);
+        }
+
+        // 4. Distance traveled in dt
+        const distDeltaKm = (newSpeed / 3600) * dt;
+
+        // 5. Fuel consumption & generation
+        const efficiency = wheelsCfg.fuel_efficiency_bonus || 0;
+        const fuelConsumed = engineCfg.fuel_consumption_per_km * (1 - efficiency) * distDeltaKm;
+        let bonusFuel = 0;
+        let bonusHp = 0;
+
+        // 6. Hull wear: wear_rate_per_km * distDeltaKm
+        const hpLost = hullCfg.wear_rate_per_km * distDeltaKm;
+
+        // 7. Update Car Production & Harvesting
+        const updatedCarList = prev.car_list.map((car) => {
+          const cfg = CAR_CONFIGS[car.car_type_id];
+          if (!cfg || cfg.harvest_time_sec <= 0) return car;
+
+          let newTimer = car.growth_timer - dt;
+          let newInventory = car.cargo_inventory ? { ...car.cargo_inventory } : undefined;
+          let newPassengerCount = car.passengers_count;
+
+          // When production timer finishes, produce goods into first storage car with space!
+          if (newTimer <= 0 && newSpeed > 0) {
+            newTimer = cfg.harvest_time_sec;
+
+            if (car.car_type_id === 'GREENHOUSE_POTATO') {
+              // Yield potato
+              const outputItem = cfg.output_item_id || 'potato';
+              const yieldAmount = cfg.output_amount_kg || 10;
+              pushCargoToStorage(prev.car_list, outputItem, yieldAmount);
+              audioSynthesizer.playHarvestSound();
+            } else if (car.car_type_id === 'BARN_CHICKEN') {
+              // Yield eggs & biofuel
+              const eggItem = cfg.output_item_id || 'egg';
+              const eggYield = cfg.output_amount_kg || 5;
+              pushCargoToStorage(prev.car_list, eggItem, eggYield);
+
+              if (cfg.secondary_output_item_id) {
+                pushCargoToStorage(prev.car_list, cfg.secondary_output_item_id, cfg.secondary_output_amount || 2);
+              }
+              audioSynthesizer.playHarvestSound();
+            } else if (car.car_type_id === 'PASSENGER') {
+              // Pick up passengers along route
+              const maxPassengers = cfg.max_capacity_kg || 20;
+              const currentP = newPassengerCount || 0;
+              if (currentP < maxPassengers) {
+                newPassengerCount = Math.min(maxPassengers, currentP + (cfg.output_amount_kg || 2));
+              }
+            } else if (car.car_type_id === 'FUEL_GENERATOR') {
+              bonusFuel += cfg.fuel_generation_rate || 0.5;
+            } else if (car.car_type_id === 'MAINTENANCE') {
+              bonusHp += cfg.repair_generation_rate || 0.3;
+            }
+          }
+
+          return {
+            ...car,
+            growth_timer: Math.max(0, newTimer),
+            cargo_inventory: newInventory,
+            passengers_count: newPassengerCount,
+          };
+        });
+
+        const newFuel = Math.min(prev.max_fuel, Math.max(0, prev.current_fuel - fuelConsumed + bonusFuel));
+        const newHp = Math.min(prev.max_hp, Math.max(0, prev.current_hp - hpLost + bonusHp));
+
+        // 8. Distance to next station
+        const newDistToStation = prev.distance_to_next_station_km - distDeltaKm;
+
+        // Check if arrived at next station
+        if (newDistToStation <= 0) {
+          audioSynthesizer.playStationBell();
+          setShowStationModal(true);
+
+          return {
+            ...prev,
+            speed_kmh: 0,
+            is_at_station: true,
+            distance_to_next_station_km: 0,
+            current_fuel: newFuel,
+            current_hp: newHp,
+            car_list: updatedCarList,
+            total_weight_tons: weight,
+          };
+        }
+
+        return {
+          ...prev,
+          speed_kmh: newSpeed,
+          current_fuel: newFuel,
+          current_hp: newHp,
+          distance_to_next_station_km: newDistToStation,
+          car_list: updatedCarList,
+          total_weight_tons: weight,
+        };
+      });
+
+      // Update Player Profile overall distance
+      setPlayerProfile((prev) => ({
+        ...prev,
+        current_distance_km: prev.current_distance_km + (trainState.speed_kmh / 3600) * dt,
+      }));
+    }, 60);
+
+    return () => clearInterval(interval);
+  }, [timeMode, manualHour, trainState.speed_kmh, stations, currentStationIndex]);
+
+  // Helper to push items to the first storage car with available capacity
+  const pushCargoToStorage = (carList: typeof trainState.car_list, itemId: string, amount: number) => {
+    for (const car of carList) {
+      if (car.car_type_id === 'STORAGE') {
+        if (!car.cargo_inventory) car.cargo_inventory = {};
+        const currentCarWeight = Object.values(car.cargo_inventory).reduce<number>((sum, val) => sum + (Number(val) || 0), 0);
+        const maxCap = CAR_CONFIGS['STORAGE'].max_capacity_kg;
+        if (currentCarWeight + amount <= maxCap) {
+          car.cargo_inventory[itemId] = (car.cargo_inventory[itemId] || 0) + amount;
+          return;
+        }
+      }
+    }
+  };
+
+  // -------------------------------------------------------------
+  // Auto-Save Game State every 5 seconds
+  // -------------------------------------------------------------
+  useEffect(() => {
+    const saveInterval = setInterval(() => {
+      saveGameData({
+        player_profile: {
+          ...playerProfile,
+          current_station_index: currentStationIndex,
+        },
+        train_state: {
+          engine_level: trainState.engine_level,
+          wheels_level: trainState.wheels_level,
+          hull_level: trainState.hull_level,
+          current_fuel: trainState.current_fuel,
+          current_hp: trainState.current_hp,
+          car_list: trainState.car_list,
+        },
+        current_station_id: currentStation.station_id,
+        journey_stats: stageStats,
+        time_mode: timeMode,
+        manual_hour: manualHour,
+        total_playtime_seconds: totalPlayTimeSeconds,
+        unlocked_weathers: unlockedWeathers,
+        active_weather: activeWeather,
+        weather_mode: weatherMode,
+      });
+    }, 5000);
+
+    return () => clearInterval(saveInterval);
+  }, [
+    playerProfile,
+    trainState,
+    currentStationIndex,
+    currentStation,
+    stageStats,
+    timeMode,
+    manualHour,
+    totalPlayTimeSeconds,
+    unlockedWeathers,
+    activeWeather,
+    weatherMode,
+  ]);
+
+  // -------------------------------------------------------------
+  // User Actions & Handlers
+  // -------------------------------------------------------------
+  const handleToggleMute = useCallback(() => {
+    const muted = audioSynthesizer.toggleMute();
+    setIsMuted(muted);
+  }, []);
+
+  const handleToggleThrottle = useCallback(() => {
+    setTrainState((prev) => {
+      const nextThrottle = prev.throttle > 0 ? 0 : 1.0;
+      if (nextThrottle > 0) {
+        audioSynthesizer.playChuff(0.8);
+      } else {
+        audioSynthesizer.playSteamHiss();
+      }
+      return { ...prev, throttle: nextThrottle };
+    });
+  }, []);
+
+  const handlePullWhistle = useCallback(() => {
+    audioSynthesizer.playWhistle();
+  }, []);
+
+  // Station Trade: Sell all cargo and passenger tickets
+  const handleSellAllCargo = useCallback(
+    (payout: number, itemsSold: Record<string, number>, passengersServed: number) => {
+      setPlayerProfile((prev) => ({
+        ...prev,
+        gold_balance: prev.gold_balance + payout,
+        total_earnings: prev.total_earnings + payout,
+        passengers_served: prev.passengers_served + passengersServed,
+      }));
+
+      // Clear storage inventories and passenger counts
+      setTrainState((prev) => ({
+        ...prev,
+        car_list: prev.car_list.map((car) => {
+          if (car.car_type_id === 'STORAGE') {
+            return { ...car, cargo_inventory: {} };
+          }
+          if (car.car_type_id === 'PASSENGER') {
+            return { ...car, passengers_count: 0 };
+          }
+          return car;
+        }),
+      }));
+
+      setStageStats((prev) => ({
+        ...prev,
+        stage_gold_earned: payout,
+        items_sold: itemsSold,
+        passengers_transported: passengersServed,
+      }));
+    },
+    []
+  );
+
+  // Station Service: Refuel
+  const handleRefuel = useCallback((units: number, cost: number) => {
+    setPlayerProfile((prev) => ({
+      ...prev,
+      gold_balance: Math.max(0, prev.gold_balance - cost),
+    }));
+    setTrainState((prev) => ({
+      ...prev,
+      current_fuel: Math.min(prev.max_fuel, prev.current_fuel + units),
+    }));
+  }, []);
+
+  // Station Service: Repair Hull
+  const handleRepair = useCallback((hp: number, cost: number) => {
+    setPlayerProfile((prev) => ({
+      ...prev,
+      gold_balance: Math.max(0, prev.gold_balance - cost),
+    }));
+    setTrainState((prev) => ({
+      ...prev,
+      current_hp: Math.min(prev.max_hp, prev.current_hp + hp),
+    }));
+  }, []);
+
+  // Station Shop: Upgrade Part (Engine, Wheels, Hull)
+  const handleUpgradePart = useCallback(
+    (partType: 'ENGINE' | 'WHEELS' | 'HULL', targetLevel: number, cost: number) => {
+      setPlayerProfile((prev) => ({
+        ...prev,
+        gold_balance: Math.max(0, prev.gold_balance - cost),
+      }));
+
+      setTrainState((prev) => {
+        if (partType === 'ENGINE') {
+          const cfg = ENGINE_CONFIGS[targetLevel];
+          return {
+            ...prev,
+            engine_level: targetLevel,
+            max_fuel: cfg.max_fuel,
+            current_fuel: Math.max(prev.current_fuel, cfg.max_fuel * 0.75),
+          };
+        } else if (partType === 'WHEELS') {
+          return {
+            ...prev,
+            wheels_level: targetLevel,
+          };
+        } else {
+          const cfg = HULL_CONFIGS[targetLevel];
+          return {
+            ...prev,
+            hull_level: targetLevel,
+            max_hp: cfg.max_hp,
+            current_hp: cfg.max_hp,
+          };
+        }
+      });
+    },
+    []
+  );
+
+  // Station Shop: Buy New Train Car
+  const handleBuyCar = useCallback((carTypeId: CarTypeId, cost: number) => {
+    setPlayerProfile((prev) => ({
+      ...prev,
+      gold_balance: Math.max(0, prev.gold_balance - cost),
+    }));
+
+    const cfg = CAR_CONFIGS[carTypeId];
+    setTrainState((prev) => ({
+      ...prev,
+      car_list: [
+        ...prev.car_list,
+        {
+          id: `car_${carTypeId}_${Date.now()}`,
+          car_type_id: carTypeId,
+          growth_timer: cfg.harvest_time_sec || 0,
+          cargo_inventory: carTypeId === 'STORAGE' ? {} : undefined,
+          passengers_count: carTypeId === 'PASSENGER' ? 0 : undefined,
+        },
+      ],
+    }));
+  }, []);
+
+  // Station Shop: Remove/Dismantle Car
+  const handleRemoveCar = useCallback((carIndex: number, refund: number) => {
+    setPlayerProfile((prev) => ({
+      ...prev,
+      gold_balance: prev.gold_balance + refund,
+    }));
+    setTrainState((prev) => ({
+      ...prev,
+      car_list: prev.car_list.filter((_, idx) => idx !== carIndex),
+    }));
+  }, []);
+
+  // Station Departure: Depart to next station
+  const handleDepartStation = useCallback(() => {
+    setShowStationModal(false);
+
+    // If departing from initial origin (Station 0) towards Station 1
+    if (playerProfile.trips_completed === 0 && trainState.distance_to_next_station_km === initialDistanceToNext) {
+      setTrainState((prev) => ({
+        ...prev,
+        is_at_station: false,
+        throttle: 1.0,
+        distance_to_next_station_km: initialDistanceToNext,
+      }));
+      return;
+    }
+
+    // Increment station index for subsequent trips
+    const nextIdx = currentStationIndex + 1;
+
+    // Check if we need to dynamically generate the next station
+    if (nextIdx >= stations.length) {
+      const lastSt = stations[stations.length - 1];
+      const newStation: Station = {
+        station_id: `ST_${stations.length + 1}`,
+        station_name: `Trạm Đại Ngàn Tuyến ${stations.length + 1}`,
+        distance_from_start_km: lastSt.distance_from_start_km + 30,
+        market_prices: {
+          potato: 10 + Math.random() * 8,
+          egg: 20 + Math.random() * 15,
+          bio_fuel: 14 + Math.random() * 10,
+          passenger_ticket: 30 + Math.random() * 20,
+        },
+        fuel_refill_price_per_unit: 3.0 + Math.random() * 1.5,
+        repair_price_per_hp: 2.2 + Math.random() * 1.0,
+        description: 'Nhà ga trung tâm vùng cao nguyên trù phú.',
+        biome: 'plains',
+      };
+      setStations((prev) => [...prev, newStation]);
+    }
+
+    setCurrentStationIndex(nextIdx);
+
+    const nextSt = stations[nextIdx + 1] || {
+      station_id: `ST_${nextIdx + 2}`,
+      station_name: `Trạm Tiếp Theo Km ${(stations[nextIdx]?.distance_from_start_km || 100) + 30}`,
+      distance_from_start_km: (stations[nextIdx]?.distance_from_start_km || 100) + 30,
+      market_prices: { potato: 12, egg: 25, bio_fuel: 15, passenger_ticket: 35 },
+      fuel_refill_price_per_unit: 3.5,
+      repair_price_per_hp: 2.5,
+      description: 'Nhà ga đón khách và giao thương mới.',
+      biome: 'plains',
+    };
+
+    const newStageDist = nextSt.distance_from_start_km - (stations[nextIdx]?.distance_from_start_km || 0);
+
+    setTrainState((prev) => ({
+      ...prev,
+      is_at_station: false,
+      throttle: 1.0,
+      distance_to_next_station_km: newStageDist,
+    }));
+
+    setPlayerProfile((prev) => ({
+      ...prev,
+      trips_completed: prev.trips_completed + 1,
+      current_station_index: nextIdx,
+    }));
+  }, [currentStationIndex, stations, playerProfile.trips_completed, trainState.distance_to_next_station_km, initialDistanceToNext]);
+
+  // Emergency Rescue
+  const handleEmergencyRescue = useCallback((fuelGranted: number, hpGranted: number, cost: number) => {
+    setPlayerProfile((prev) => ({
+      ...prev,
+      gold_balance: Math.max(0, prev.gold_balance - cost),
+    }));
+    setTrainState((prev) => ({
+      ...prev,
+      current_fuel: Math.min(prev.max_fuel, prev.current_fuel + fuelGranted),
+      current_hp: Math.min(prev.max_hp, prev.current_hp + hpGranted),
+      throttle: 1.0,
+    }));
+    setShowEmergencyModal(false);
+  }, []);
+
+  const isAtInitialOrigin =
+    playerProfile.trips_completed === 0 && trainState.distance_to_next_station_km === initialDistanceToNext;
+
+  return (
+    <div className="relative w-screen h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans">
+      {/* 1. TOP HUD (Header & Gauges) */}
+      <HUD
+        playerProfile={playerProfile}
+        trainState={trainState}
+        timeState={timeState}
+        currentStation={currentStation}
+        nextStation={nextStation}
+        totalCargoKg={totalCargoKg}
+        maxCargoCapacityKg={maxCargoCapacityKg}
+        totalPassengers={totalPassengers}
+        isMuted={isMuted}
+        onToggleMute={handleToggleMute}
+        onOpenCargo={() => setShowCargoSheet(true)}
+        onOpenTimeModal={() => setShowTimeModal(true)}
+        onOpenWeatherModal={() => setShowWeatherModal(true)}
+        onToggleThrottle={handleToggleThrottle}
+        onPullWhistle={handlePullWhistle}
+        onEmergencyCall={() => setShowEmergencyModal(true)}
+      />
+
+      {/* 2. MAIN VIEWPORT: PARALLAX TRAIN CANVAS */}
+      <main className="flex-1 relative w-full h-full min-h-0 overflow-hidden">
+        <TrainCanvas
+          trainState={trainState}
+          timeState={timeState}
+          currentStation={currentStation}
+          nextStation={nextStation}
+          progressToNext={progressToNext}
+          onPullWhistle={handlePullWhistle}
+          onOpenWeatherModal={() => setShowWeatherModal(true)}
+        />
+
+        {/* Dynamic Weather Unlock Toast Banner */}
+        {weatherUnlockToast && (
+          <div
+            id="weather-unlock-toast"
+            className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 border-2 border-amber-400/80 text-white px-5 py-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3.5 animate-bounce max-w-md pointer-events-auto"
+          >
+            <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-2xl">
+              {weatherUnlockToast.icon}
+            </div>
+            <div className="flex flex-col">
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] font-extrabold uppercase tracking-wider text-amber-400">
+                  🎉 MỞ KHÓA THỜI TIẾT MỚI!
+                </span>
+              </div>
+              <span className="text-sm font-bold text-slate-100">{weatherUnlockToast.name}</span>
+              <span className="text-xs text-slate-300">{weatherUnlockToast.desc}</span>
+            </div>
+            <button
+              onClick={() => {
+                setWeatherUnlockToast(null);
+                setShowWeatherModal(true);
+              }}
+              className="ml-auto bg-amber-500 hover:bg-amber-400 text-amber-950 text-xs font-bold px-3 py-1.5 rounded-lg cursor-pointer transition active:scale-95"
+            >
+              Xem ngay
+            </button>
+          </div>
+        )}
+      </main>
+
+      {/* 3. MODALS & POPUPS */}
+      {/* Station Modal */}
+      {showStationModal && (
+        <StationModal
+          station={isAtInitialOrigin ? currentStation : nextStation}
+          nextStation={isAtInitialOrigin ? nextStation : stations[currentStationIndex + 2] || nextStation}
+          stageDistanceKm={isAtInitialOrigin ? 0 : stageTotalDistance}
+          playerProfile={playerProfile}
+          trainState={trainState}
+          onSellAllCargo={handleSellAllCargo}
+          onRefuel={handleRefuel}
+          onRepair={handleRepair}
+          onUpgradePart={handleUpgradePart}
+          onBuyCar={handleBuyCar}
+          onRemoveCar={handleRemoveCar}
+          onDepartStation={handleDepartStation}
+        />
+      )}
+
+      {/* Cargo Inspection Sheet Drawer */}
+      {showCargoSheet && (
+        <CargoSheet
+          trainState={trainState}
+          onClose={() => setShowCargoSheet(false)}
+        />
+      )}
+
+      {/* Real-Time Sync & Day/Night Settings Modal */}
+      {showTimeModal && (
+        <TimeSettingsModal
+          timeState={timeState}
+          onSetTimeMode={(mode) => setTimeMode(mode)}
+          onSetManualHour={(h) => setManualHour(h)}
+          onClose={() => setShowTimeModal(false)}
+        />
+      )}
+
+      {/* Weather System Customization Modal */}
+      {showWeatherModal && (
+        <WeatherModal
+          isOpen={showWeatherModal}
+          timeState={timeState}
+          onSelectWeather={(w) => setActiveWeather(w)}
+          onToggleWeatherMode={(m) => setWeatherMode(m)}
+          onUnlockAllWeathersForTesting={() => {
+            setUnlockedWeathers(['SUNNY', 'CLOUDY', 'RAINY', 'THUNDERSTORM', 'COLD', 'FOGGY', 'METEOR_SHOWER']);
+          }}
+          onClose={() => setShowWeatherModal(false)}
+        />
+      )}
+
+      {/* Emergency Breakdown / Rescue Modal */}
+      {showEmergencyModal && (
+        <EmergencyModal
+          trainState={trainState}
+          playerProfile={playerProfile}
+          onEmergencyRescue={handleEmergencyRescue}
+          onClose={() => setShowEmergencyModal(false)}
+        />
+      )}
+    </div>
+  );
+}
