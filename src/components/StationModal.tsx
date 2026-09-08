@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Station, TrainState, PlayerProfile, CarTypeId } from '../types';
+import { Station, TrainState, PlayerProfile, CarTypeId, RuntimeStationState, Customer } from '../types';
 import {
   ENGINE_CONFIGS,
   WHEELS_CONFIGS,
@@ -23,6 +23,7 @@ import {
   Eye,
   Maximize2,
   Minimize2,
+  Users,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { audioSynthesizer } from '../utils/audioSynthesizer';
@@ -33,6 +34,9 @@ interface StationModalProps {
   stageDistanceKm: number;
   playerProfile: PlayerProfile;
   trainState: TrainState;
+  runtimeStation?: RuntimeStationState;
+  onBoardCustomer?: (customer: Customer) => void;
+  onBoardAllCustomers?: () => void;
   onSellAllCargo: (payout: number, itemsSold: Record<string, number>, passengersServed: number) => void;
   onRefuel: (units: number, cost: number) => void;
   onRepair: (hp: number, cost: number) => void;
@@ -48,6 +52,9 @@ export const StationModal: React.FC<StationModalProps> = ({
   stageDistanceKm,
   playerProfile,
   trainState,
+  runtimeStation,
+  onBoardCustomer,
+  onBoardAllCustomers,
   onSellAllCargo,
   onRefuel,
   onRepair,
@@ -80,6 +87,12 @@ export const StationModal: React.FC<StationModalProps> = ({
       totalPassengers += car.passengers_count || 0;
     }
   });
+
+  // Check if player has passenger cars and max capacity
+  const hasPassengerCars = trainState.car_list.some((car) => car.car_type_id === 'PASSENGER');
+  const maxPassengerCapacity = trainState.car_list
+    .filter((car) => car.car_type_id === 'PASSENGER')
+    .reduce((acc, car) => acc + (CAR_CONFIGS[car.car_type_id]?.max_capacity_kg || 20), 0);
 
   // Check if player has any produce/agricultural or cargo storage car
   const hasProduceCars = trainState.car_list.some(
@@ -205,7 +218,7 @@ export const StationModal: React.FC<StationModalProps> = ({
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-lg sm:text-xl font-bold text-amber-300 font-sans tracking-wide">
-                  {station.station_name}
+                  {runtimeStation?.number ? `Ga Số #${runtimeStation.number}: ` : ''}{station.station_name}
                 </h2>
                 <span className="px-2 py-0.5 rounded-full bg-amber-900/60 border border-amber-600/50 text-amber-200 text-xs font-mono">
                   Km {station.distance_from_start_km}
@@ -419,6 +432,88 @@ export const StationModal: React.FC<StationModalProps> = ({
                   )}
                 </div>
               </div>
+
+              {/* CustomerSystem: Hành Khách Chờ Sân Ga */}
+              {runtimeStation?.customers && runtimeStation.customers.length > 0 && (
+                <div className="bg-slate-800/50 border border-slate-700/70 rounded-xl p-4 space-y-3 animate-in fade-in duration-200">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/60 pb-2.5">
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-400/40 flex items-center justify-center text-lg">
+                        👥
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-amber-200">
+                          Hành Khách Chờ Tại Sân Ga ({runtimeStation.customers.length} người)
+                        </h4>
+                        <p className="text-[11px] text-slate-400">
+                          Hành khách đợi đón chuyến tàu tiếp theo
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-300 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700 font-mono">
+                        Toa Khách: {totalPassengers} / {maxPassengerCapacity} chỗ
+                      </span>
+                      {hasPassengerCars && onBoardAllCustomers && runtimeStation.customers.some((c) => !c.boarded) && (
+                        <button
+                          onClick={onBoardAllCustomers}
+                          className="flex items-center gap-1.5 px-3 py-1 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-lg text-xs font-bold transition shadow active:scale-95 cursor-pointer"
+                        >
+                          <Users className="w-3.5 h-3.5" />
+                          <span>Đón Tất Cả Lên Tàu</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    {runtimeStation.customers.map((c) => (
+                      <div
+                        key={c.id}
+                        className={`flex items-center justify-between p-2.5 rounded-lg border transition ${
+                          c.boarded
+                            ? 'bg-emerald-950/30 border-emerald-500/30 text-slate-300'
+                            : 'bg-slate-900/80 border-slate-800 text-slate-200 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span className="text-2xl flex-shrink-0">{c.avatar}</span>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-xs sm:text-sm text-slate-100 truncate">{c.name}</span>
+                              {c.hat && <span className="text-[9px] text-amber-300 bg-amber-950/60 px-1 py-0.2 rounded border border-amber-500/30">Nón</span>}
+                            </div>
+                            <p className="text-[11px] text-slate-400 truncate">{c.role}</p>
+                            <div className="flex items-center gap-2 text-[10px] text-slate-400 font-mono mt-0.5">
+                              <span>🧳 {c.luggageKg} kg</span>
+                              {c.tipMultiplier > 1 && <span className="text-amber-300">✨ Tip +{((c.tipMultiplier - 1) * 100).toFixed(0)}%</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1 flex-shrink-0 ml-2">
+                          <span className="font-mono font-bold text-xs text-amber-300">
+                            +{Math.round(c.ticketPrice * c.tipMultiplier)} G
+                          </span>
+                          {c.boarded ? (
+                            <span className="text-[10px] font-semibold text-emerald-400 flex items-center gap-0.5">
+                              <CheckCircle2 className="w-3 h-3" /> Đã Lên Tàu
+                            </span>
+                          ) : onBoardCustomer && hasPassengerCars ? (
+                            <button
+                              onClick={() => onBoardCustomer(c)}
+                              className="text-[10px] px-2.5 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-300 font-semibold transition active:scale-95 cursor-pointer"
+                            >
+                              Đón Khách
+                            </button>
+                          ) : (
+                            <span className="text-[10px] text-slate-400">Đang chờ</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Station Market Price Board (Only displayed if train has produce cars) */}
               {hasProduceCars && (

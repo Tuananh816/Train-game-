@@ -74,9 +74,34 @@ export interface CarState {
   passengers_count?: number; // for PASSENGER car
 }
 
+export interface Customer {
+  id: string;
+  name: string;
+  role: string;
+  avatar: string;
+  coatColor: string;
+  hat: boolean;
+  ticketPrice: number;
+  luggageKg: number;
+  tipMultiplier: number;
+  boarded?: boolean;
+  waving?: boolean;
+}
+
+export interface RuntimeStationState {
+  active: boolean;
+  x: number;
+  dwell: number;
+  departing: boolean;
+  number: number;
+  awarded: boolean;
+  customers: Customer[];
+}
+
 export interface Station {
   station_id: string;
   station_name: string;
+  station_number?: number;
   distance_from_start_km: number;
   market_prices: Record<string, number>; // item_id -> price_per_unit
   fuel_refill_price_per_unit: number;

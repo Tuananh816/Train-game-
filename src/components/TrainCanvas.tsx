@@ -1,5 +1,5 @@
 import React, { useRef, useEffect } from 'react';
-import { TrainState, TimeState, Station } from '../types';
+import { TrainState, TimeState, Station, RuntimeStationState, Customer } from '../types';
 import { audioSynthesizer } from '../utils/audioSynthesizer';
 
 interface TrainCanvasProps {
@@ -8,6 +8,7 @@ interface TrainCanvasProps {
   currentStation: Station;
   nextStation: Station;
   progressToNext: number; // 0 to 1
+  runtimeStation?: RuntimeStationState;
   onPullWhistle: () => void;
   onOpenWeatherModal?: () => void;
 }
@@ -31,6 +32,7 @@ export const TrainCanvas: React.FC<TrainCanvasProps> = ({
   currentStation,
   nextStation,
   progressToNext,
+  runtimeStation,
   onPullWhistle,
   onOpenWeatherModal,
 }) => {
@@ -44,6 +46,7 @@ export const TrainCanvas: React.FC<TrainCanvasProps> = ({
     currentStation,
     nextStation,
     progressToNext,
+    runtimeStation,
   });
   stateRef.current = {
     trainState,
@@ -51,6 +54,7 @@ export const TrainCanvas: React.FC<TrainCanvasProps> = ({
     currentStation,
     nextStation,
     progressToNext,
+    runtimeStation,
   };
 
   // Animation state references (persists across continuous 60fps render loop)
@@ -374,7 +378,8 @@ export const TrainCanvas: React.FC<TrainCanvasProps> = ({
         curStation,
         nextSt,
         anim.departStationX,
-        curTime
+        curTime,
+        stateRef.current.runtimeStation
       );
 
       // ----------------------------------------------------
@@ -809,17 +814,38 @@ function drawStationInfrastructure(
   currentStation: Station,
   nextStation: Station,
   departStationX: number,
-  timeState: TimeState
+  timeState: TimeState,
+  runtimeStation?: RuntimeStationState
 ) {
   const platformW = 620;
 
   if (isAtStation) {
     // 1. Stopped at current station
-    drawSingleStation(ctx, w, groundY, w * 0.12, currentStation, 'RED', timeState);
+    drawSingleStation(
+      ctx,
+      w,
+      groundY,
+      w * 0.12,
+      currentStation,
+      'RED',
+      timeState,
+      runtimeStation?.customers,
+      runtimeStation?.number
+    );
   } else {
     // 2. Departing from previous station (smooth physical movement matching track & ground speed)
     if (departStationX > -platformW - 120) {
-      drawSingleStation(ctx, w, groundY, departStationX, currentStation, 'GREEN', timeState);
+      drawSingleStation(
+        ctx,
+        w,
+        groundY,
+        departStationX,
+        currentStation,
+        'GREEN',
+        timeState,
+        undefined,
+        runtimeStation ? Math.max(1, runtimeStation.number - 1) : undefined
+      );
     }
 
     // 3. Approaching next station
@@ -827,7 +853,17 @@ function drawStationInfrastructure(
       const approachRatio = (progressToNext - 0.85) / 0.15; // 0 to 1
       const nextStationX = w * 1.25 - approachRatio * (w * 1.13);
       const signalState: 'GREEN' | 'YELLOW' | 'RED' = approachRatio > 0.8 ? 'RED' : 'YELLOW';
-      drawSingleStation(ctx, w, groundY, nextStationX, nextStation, signalState, timeState);
+      drawSingleStation(
+        ctx,
+        w,
+        groundY,
+        nextStationX,
+        nextStation,
+        signalState,
+        timeState,
+        runtimeStation?.customers,
+        runtimeStation?.number
+      );
     }
   }
 }
@@ -840,7 +876,9 @@ function drawSingleStation(
   stationX: number,
   activeStation: Station,
   signalState: 'GREEN' | 'YELLOW' | 'RED',
-  timeState: TimeState
+  timeState: TimeState,
+  customers?: Customer[],
+  stationNumber?: number
 ) {
   const biome = activeStation.biome || 'plains';
   const platformW = 620;
@@ -1087,18 +1125,21 @@ function drawSingleStation(
   // -------------------------------------------------------------
   // C. STATION NAMEBOARD SIGN
   // -------------------------------------------------------------
-  const signX = stationX + platformW / 2 - 110;
+  const signX = stationX + platformW / 2 - 120;
   const signY = canopyY + 22;
   ctx.fillStyle = '#0f172a';
-  ctx.fillRect(signX, signY, 220, 28);
+  ctx.fillRect(signX, signY, 240, 28);
   ctx.strokeStyle = '#f59e0b';
   ctx.lineWidth = 2.5;
-  ctx.strokeRect(signX, signY, 220, 28);
+  ctx.strokeRect(signX, signY, 240, 28);
 
   ctx.fillStyle = '#fef08a';
-  ctx.font = 'bold 13px "Plus Jakarta Sans", sans-serif';
+  ctx.font = 'bold 12px "Plus Jakarta Sans", sans-serif';
   ctx.textAlign = 'center';
-  ctx.fillText(`🚉 ${activeStation.station_name.toUpperCase()}`, signX + 110, signY + 19);
+  const stationLabel = stationNumber
+    ? `🚉 GA #${stationNumber}: ${activeStation.station_name.toUpperCase()}`
+    : `🚉 ${activeStation.station_name.toUpperCase()}`;
+  ctx.fillText(stationLabel, signX + 120, signY + 19);
 
   // -------------------------------------------------------------
   // D. PLATFORM BASE & HAZARD TACTILE EDGE
@@ -1146,14 +1187,33 @@ function drawSingleStation(
   ctx.fillRect(luggageX + 12, platformY - 18, 2, 18);
 
   // Station Passengers Silhouettes / Characters
-  const passengers = [
-    { x: stationX + 120, coat: '#1e3a5f', hat: true, waving: signalState === 'GREEN' || signalState === 'RED' },
-    { x: stationX + 145, coat: '#831843', hat: false, waving: false },
-    { x: stationX + 370, coat: '#14532d', hat: true, waving: true },
-    { x: stationX + 410, coat: '#475569', hat: true, waving: false },
+  const defaultPassengers = [
+    { x: stationX + 110, coat: '#1e3a5f', hat: true, waving: signalState === 'GREEN' || signalState === 'RED', luggage: 5 },
+    { x: stationX + 145, coat: '#831843', hat: false, waving: false, luggage: 4 },
+    { x: stationX + 370, coat: '#14532d', hat: true, waving: true, luggage: 7 },
+    { x: stationX + 410, coat: '#475569', hat: true, waving: false, luggage: 6 },
   ];
 
+  const passengers = customers && customers.length > 0
+    ? customers.slice(0, 8).map((c, i) => ({
+        x: stationX + 90 + i * 42,
+        coat: c.coatColor || '#1e3a5f',
+        hat: c.hat,
+        waving: signalState === 'GREEN' || signalState === 'RED' || c.waving,
+        luggage: c.luggageKg,
+        avatar: c.avatar,
+      }))
+    : defaultPassengers;
+
   passengers.forEach((p) => {
+    // Individual suitcase if luggage exists
+    if (p.luggage && p.luggage > 0) {
+      ctx.fillStyle = '#b45309';
+      ctx.fillRect(p.x + 6, platformY - 8, 8, 8);
+      ctx.fillStyle = '#f59e0b';
+      ctx.fillRect(p.x + 8, platformY - 8, 2, 8);
+    }
+
     // Head
     ctx.fillStyle = '#fcd34d';
     ctx.beginPath();

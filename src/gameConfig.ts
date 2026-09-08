@@ -227,7 +227,7 @@ export const STATIONS: Station[] = [
   {
     station_id: 'ST_002',
     station_name: 'Trạm Băng Giá (Đỉnh Núi)',
-    distance_from_start_km: 15.0, // 15km từ trạm 1
+    distance_from_start_km: 7.5, // 7.5km từ trạm 1 (ngẫu nhiên trong khoảng 3 - 15km)
     market_prices: {
       potato: 10.0, // Nông sản được giá cao ở xứ lạnh
       egg: 25.0,
@@ -242,7 +242,7 @@ export const STATIONS: Station[] = [
   {
     station_id: 'ST_003',
     station_name: 'Trạm Rừng Thông Xanh',
-    distance_from_start_km: 35.0, // 20km từ trạm 2
+    distance_from_start_km: 15.5, // 8.0km từ trạm 2
     market_prices: {
       potato: 7.5,
       egg: 18.0,
@@ -257,7 +257,7 @@ export const STATIONS: Station[] = [
   {
     station_id: 'ST_004',
     station_name: 'Trạm Cảng Biển Nắng Gió',
-    distance_from_start_km: 60.0, // 25km từ trạm 3
+    distance_from_start_km: 25.0, // 9.5km từ trạm 3
     market_prices: {
       potato: 12.0,
       egg: 22.0,
@@ -272,7 +272,7 @@ export const STATIONS: Station[] = [
   {
     station_id: 'ST_005',
     station_name: 'Trạm Đô Thị Ánh Sáng',
-    distance_from_start_km: 90.0, // 30km từ trạm 4
+    distance_from_start_km: 36.0, // 11.0km từ trạm 4
     market_prices: {
       potato: 15.0,
       egg: 30.0,

@@ -9,6 +9,8 @@ import {
   WeatherType,
   WeatherSelectionMode,
   SaveData,
+  RuntimeStationState,
+  Customer,
 } from './types';
 import {
   ENGINE_CONFIGS,
@@ -22,6 +24,8 @@ import { WEATHER_CONFIGS, WEATHER_UNLOCK_ORDER } from './data/weatherConfig';
 import { loadGameSave, saveGameData, getDefaultSaveData, resetGameSave } from './utils/storage';
 import { calculateTimeState } from './utils/timeEngine';
 import { audioSynthesizer } from './utils/audioSynthesizer';
+import { CustomerSystem } from './utils/customerSystem';
+import { generateStation, getRandomStationDistanceKm } from './utils/stationGenerator';
 import { TrainCanvas } from './components/TrainCanvas';
 import { HUD } from './components/HUD';
 import { StationModal } from './components/StationModal';
@@ -70,10 +74,13 @@ export default function App() {
     desc: string;
   } | null>(null);
 
-  // Derive initial target distance
+  // Derive initial target distance (ngẫu nhiên trong bán kính 15km, ngắn nhất 3km)
   const initialNextStation = STATIONS[currentStationIndex + 1] || STATIONS[1];
   const initialCurrentStation = STATIONS[currentStationIndex] || STATIONS[0];
-  const initialDistanceToNext = initialNextStation.distance_from_start_km - initialCurrentStation.distance_from_start_km;
+  const initialDistanceToNext = Math.max(
+    3.0,
+    Math.min(15.0, Number((initialNextStation.distance_from_start_km - initialCurrentStation.distance_from_start_km).toFixed(1)))
+  );
 
   const [trainState, setTrainState] = useState<TrainState>(() => {
     const engCfg = ENGINE_CONFIGS[saveData.train_state.engine_level || 1];
@@ -120,6 +127,25 @@ export default function App() {
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [saveLoadInitialTab, setSaveLoadInitialTab] = useState<'SAVE' | 'LOAD'>('LOAD');
 
+  // Procedural Station and Customer System State
+  const [runtimeStation, setRuntimeStation] = useState<RuntimeStationState>(() => {
+    const initialStationNum = Math.max(1, (saveData.player_profile.trips_completed || 0) + 1);
+    const isFirstTime = (saveData.player_profile.trips_completed || 0) === 0;
+    return {
+      active: true,
+      x: isFirstTime ? 100 : 1280,
+      dwell: 0,
+      departing: false,
+      number: initialStationNum,
+      awarded: false,
+      customers: CustomerSystem.create(4, initialStationNum),
+    };
+  });
+
+  const [nextStationAtDistance, setNextStationAtDistance] = useState<number>(() => {
+    return saveData.player_profile.current_distance_km + initialDistanceToNext;
+  });
+
   // Modals - Station modal will be opened once player enters game if at origin
   const [showStationModal, setShowStationModal] = useState<boolean>(false);
   const [showCargoSheet, setShowCargoSheet] = useState<boolean>(false);
@@ -135,8 +161,8 @@ export default function App() {
   const currentStation = stations[currentStationIndex] || stations[0];
   const nextStation = stations[currentStationIndex + 1] || {
     station_id: `ST_${currentStationIndex + 2}`,
-    station_name: `Trạm Tuyến Mới Km ${currentStation.distance_from_start_km + 30}`,
-    distance_from_start_km: currentStation.distance_from_start_km + 30,
+    station_name: `Trạm Tuyến Mới Km ${(currentStation.distance_from_start_km + 10).toFixed(1)}`,
+    distance_from_start_km: Number((currentStation.distance_from_start_km + 10).toFixed(1)),
     market_prices: {
       potato: 8.0 + Math.random() * 8,
       egg: 16.0 + Math.random() * 12,
@@ -393,6 +419,11 @@ export default function App() {
         if (newDistToStation <= 0) {
           audioSynthesizer.playStationBell();
           setShowStationModal(true);
+          setRuntimeStation((st) => ({
+            ...st,
+            dwell: st.dwell + dt,
+            awarded: true,
+          }));
 
           return {
             ...prev,
@@ -639,9 +670,65 @@ export default function App() {
     }));
   }, []);
 
+  // Procedural Station Start logic provided by user:
+  // start(distance, customerCount) {
+  //   this.station = {
+  //     active: true, x: this.gameWidth + 80, dwell: 0, departing: false,
+  //     number: this.station.number + 1, awarded: false,
+  //     customers: CustomerSystem.create(customerCount)
+  //   };
+  //   this.nextStationAt = distance + 2200 + Math.random() * 1600;
+  // }
+  const startNextStation = useCallback((distance: number, customerCount: number) => {
+    const gameWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    const nextNumber = runtimeStation.number + 1;
+    const newCustomers = CustomerSystem.create(customerCount, nextNumber);
+
+    setRuntimeStation({
+      active: true,
+      x: gameWidth + 80,
+      dwell: 0,
+      departing: false,
+      number: nextNumber,
+      awarded: false,
+      customers: newCustomers,
+    });
+
+    // Khoảng cách trạm dừng chân ngẫu nhiên: ngắn nhất 3 km, dài nhất trong bán kính 15 km
+    const stageDistKm = getRandomStationDistanceKm();
+    const nextStationAtKm = Number((distance + stageDistKm).toFixed(1));
+
+    setNextStationAtDistance(nextStationAtKm);
+
+    // Procedural station metadata
+    const generatedSt = generateStation(nextNumber, nextStationAtKm);
+    setStations((prev) => {
+      const list = [...prev];
+      if (currentStationIndex + 1 < list.length) {
+        list[currentStationIndex + 1] = generatedSt;
+      } else {
+        list.push(generatedSt);
+      }
+      return list;
+    });
+
+    setTrainState((prev) => ({
+      ...prev,
+      is_at_station: false,
+      throttle: 1.0,
+      distance_to_next_station_km: stageDistKm,
+    }));
+
+    return { nextStationAtKm, stageDistKm };
+  }, [runtimeStation.number, currentStationIndex]);
+
   // Station Departure: Depart to next station
   const handleDepartStation = useCallback(() => {
     setShowStationModal(false);
+
+    // Calculate customer count based on train passenger cars
+    const passengerCarCount = trainState.car_list.filter((c) => c.car_type_id === 'PASSENGER').length;
+    const customerCount = Math.max(3, Math.min(8, 2 + passengerCarCount * 3));
 
     // If departing from initial origin (Station 0) towards Station 1
     if (playerProfile.trips_completed === 0 && trainState.distance_to_next_station_km === initialDistanceToNext) {
@@ -654,58 +741,123 @@ export default function App() {
       return;
     }
 
-    // Increment station index for subsequent trips
-    const nextIdx = currentStationIndex + 1;
-
-    // Check if we need to dynamically generate the next station
-    if (nextIdx >= stations.length) {
-      const lastSt = stations[stations.length - 1];
-      const newStation: Station = {
-        station_id: `ST_${stations.length + 1}`,
-        station_name: `Trạm Đại Ngàn Tuyến ${stations.length + 1}`,
-        distance_from_start_km: lastSt.distance_from_start_km + 30,
-        market_prices: {
-          potato: 10 + Math.random() * 8,
-          egg: 20 + Math.random() * 15,
-          bio_fuel: 14 + Math.random() * 10,
-          passenger_ticket: 30 + Math.random() * 20,
-        },
-        fuel_refill_price_per_unit: 3.0 + Math.random() * 1.5,
-        repair_price_per_hp: 2.2 + Math.random() * 1.0,
-        description: 'Nhà ga trung tâm vùng cao nguyên trù phú.',
-        biome: 'plains',
-      };
-      setStations((prev) => [...prev, newStation]);
-    }
-
-    setCurrentStationIndex(nextIdx);
-
-    const nextSt = stations[nextIdx + 1] || {
-      station_id: `ST_${nextIdx + 2}`,
-      station_name: `Trạm Tiếp Theo Km ${(stations[nextIdx]?.distance_from_start_km || 100) + 30}`,
-      distance_from_start_km: (stations[nextIdx]?.distance_from_start_km || 100) + 30,
-      market_prices: { potato: 12, egg: 25, bio_fuel: 15, passenger_ticket: 35 },
-      fuel_refill_price_per_unit: 3.5,
-      repair_price_per_hp: 2.5,
-      description: 'Nhà ga đón khách và giao thương mới.',
-      biome: 'plains',
-    };
-
-    const newStageDist = nextSt.distance_from_start_km - (stations[nextIdx]?.distance_from_start_km || 0);
-
-    setTrainState((prev) => ({
+    // Mark previous station departing
+    setRuntimeStation((prev) => ({
       ...prev,
-      is_at_station: false,
-      throttle: 1.0,
-      distance_to_next_station_km: newStageDist,
+      departing: true,
     }));
+
+    const nextIdx = currentStationIndex + 1;
+    setCurrentStationIndex(nextIdx);
 
     setPlayerProfile((prev) => ({
       ...prev,
       trips_completed: prev.trips_completed + 1,
       current_station_index: nextIdx,
     }));
-  }, [currentStationIndex, stations, playerProfile.trips_completed, trainState.distance_to_next_station_km, initialDistanceToNext]);
+
+    // Trigger start(distance, customerCount)
+    startNextStation(playerProfile.current_distance_km, customerCount);
+  }, [
+    currentStationIndex,
+    trainState.car_list,
+    trainState.distance_to_next_station_km,
+    initialDistanceToNext,
+    playerProfile.trips_completed,
+    playerProfile.current_distance_km,
+    startNextStation,
+  ]);
+
+  // Board single customer
+  const handleBoardCustomer = useCallback((customer: Customer) => {
+    let spaceFound = false;
+    setTrainState((prev) => {
+      let filled = false;
+      const updatedList = prev.car_list.map((c) => {
+        if (!filled && c.car_type_id === 'PASSENGER') {
+          const cap = CAR_CONFIGS['PASSENGER']?.max_capacity_kg || 20;
+          const cur = c.passengers_count || 0;
+          if (cur < cap) {
+            filled = true;
+            spaceFound = true;
+            return { ...c, passengers_count: cur + 1 };
+          }
+        }
+        return c;
+      });
+      if (!filled) return prev;
+      return { ...prev, car_list: updatedList };
+    });
+
+    if (spaceFound) {
+      setRuntimeStation((prev) => ({
+        ...prev,
+        customers: prev.customers.map((c) =>
+          c.id === customer.id ? { ...c, boarded: true } : c
+        ),
+      }));
+
+      const fare = Math.round(customer.ticketPrice * customer.tipMultiplier);
+      setPlayerProfile((prev) => ({
+        ...prev,
+        gold_balance: prev.gold_balance + fare,
+        passengers_served: prev.passengers_served + 1,
+      }));
+
+      audioSynthesizer.playCoinSound();
+    }
+  }, []);
+
+  // Board all waiting customers
+  const handleBoardAllCustomers = useCallback(() => {
+    const unboarded = runtimeStation.customers.filter((c) => !c.boarded);
+    if (unboarded.length === 0) return;
+
+    let totalFare = 0;
+    let boardedCount = 0;
+    const boardedIds = new Set<string>();
+
+    setTrainState((prev) => {
+      const updatedList = [...prev.car_list];
+      for (const cust of unboarded) {
+        let placed = false;
+        for (let i = 0; i < updatedList.length; i++) {
+          const car = updatedList[i];
+          if (car.car_type_id === 'PASSENGER') {
+            const cap = CAR_CONFIGS['PASSENGER']?.max_capacity_kg || 20;
+            const cur = car.passengers_count || 0;
+            if (cur < cap) {
+              updatedList[i] = { ...car, passengers_count: cur + 1 };
+              placed = true;
+              boardedIds.add(cust.id);
+              totalFare += Math.round(cust.ticketPrice * cust.tipMultiplier);
+              boardedCount += 1;
+              break;
+            }
+          }
+        }
+        if (!placed) break;
+      }
+      return { ...prev, car_list: updatedList };
+    });
+
+    if (boardedCount > 0) {
+      setRuntimeStation((prev) => ({
+        ...prev,
+        customers: prev.customers.map((c) =>
+          boardedIds.has(c.id) ? { ...c, boarded: true } : c
+        ),
+      }));
+
+      setPlayerProfile((prev) => ({
+        ...prev,
+        gold_balance: prev.gold_balance + totalFare,
+        passengers_served: prev.passengers_served + boardedCount,
+      }));
+
+      audioSynthesizer.playCoinSound();
+    }
+  }, [runtimeStation.customers]);
 
   // Emergency Rescue
   const handleEmergencyRescue = useCallback((fuelGranted: number, hpGranted: number, cost: number) => {
@@ -775,6 +927,17 @@ export default function App() {
       is_at_station: isFirstTime,
       distance_to_next_station_km: distNext,
       total_weight_tons: weight,
+    });
+
+    const stNum = Math.max(1, (data.player_profile.trips_completed || 0) + 1);
+    setRuntimeStation({
+      active: true,
+      x: isFirstTime ? 100 : 1280,
+      dwell: 0,
+      departing: false,
+      number: stNum,
+      awarded: false,
+      customers: CustomerSystem.create(4, stNum),
     });
   }, [stations]);
 
@@ -864,6 +1027,7 @@ export default function App() {
           currentStation={currentStation}
           nextStation={nextStation}
           progressToNext={progressToNext}
+          runtimeStation={runtimeStation}
           onPullWhistle={handlePullWhistle}
           onOpenWeatherModal={() => setShowWeatherModal(true)}
         />
@@ -954,6 +1118,9 @@ export default function App() {
           stageDistanceKm={isAtInitialOrigin ? 0 : stageTotalDistance}
           playerProfile={playerProfile}
           trainState={trainState}
+          runtimeStation={runtimeStation}
+          onBoardCustomer={handleBoardCustomer}
+          onBoardAllCustomers={handleBoardAllCustomers}
           onSellAllCargo={handleSellAllCargo}
           onRefuel={handleRefuel}
           onRepair={handleRepair}
