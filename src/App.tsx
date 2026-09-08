@@ -8,6 +8,7 @@ import {
   JourneyStats,
   WeatherType,
   WeatherSelectionMode,
+  SaveData,
 } from './types';
 import {
   ENGINE_CONFIGS,
@@ -18,7 +19,7 @@ import {
   ITEMS,
 } from './data/gameConfig';
 import { WEATHER_CONFIGS, WEATHER_UNLOCK_ORDER } from './data/weatherConfig';
-import { loadGameSave, saveGameData } from './utils/storage';
+import { loadGameSave, saveGameData, getDefaultSaveData, resetGameSave } from './utils/storage';
 import { calculateTimeState } from './utils/timeEngine';
 import { audioSynthesizer } from './utils/audioSynthesizer';
 import { TrainCanvas } from './components/TrainCanvas';
@@ -28,6 +29,9 @@ import { CargoSheet } from './components/CargoSheet';
 import { TimeSettingsModal } from './components/TimeSettingsModal';
 import { WeatherModal } from './components/WeatherModal';
 import { EmergencyModal } from './components/EmergencyModal';
+import { StartScreen } from './components/StartScreen';
+import { SaveLoadModal } from './components/SaveLoadModal';
+import { SettingsModal } from './components/SettingsModal';
 
 export default function App() {
   // -------------------------------------------------------------
@@ -110,10 +114,14 @@ export default function App() {
   const [stageStats, setStageStats] = useState<JourneyStats>(saveData.journey_stats);
   const [isMuted, setIsMuted] = useState<boolean>(false);
 
-  // Modals - Open station modal at start if at origin
-  const [showStationModal, setShowStationModal] = useState<boolean>(
-    () => (saveData.player_profile.trips_completed || 0) === 0
-  );
+  // Title Screen State (App starts at StartScreen)
+  const [isGameStarted, setIsGameStarted] = useState<boolean>(false);
+  const [showSaveLoadModal, setShowSaveLoadModal] = useState<boolean>(false);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [saveLoadInitialTab, setSaveLoadInitialTab] = useState<'SAVE' | 'LOAD'>('LOAD');
+
+  // Modals - Station modal will be opened once player enters game if at origin
+  const [showStationModal, setShowStationModal] = useState<boolean>(false);
   const [showCargoSheet, setShowCargoSheet] = useState<boolean>(false);
   const [showTimeModal, setShowTimeModal] = useState<boolean>(false);
   const [showWeatherModal, setShowWeatherModal] = useState<boolean>(false);
@@ -714,35 +722,144 @@ export default function App() {
     setShowEmergencyModal(false);
   }, []);
 
+  // Save / Load handlers
+  const handleLoadSave = useCallback((data: SaveData) => {
+    setPlayerProfile(data.player_profile);
+    const stationIdx = data.player_profile.current_station_index || 0;
+    setCurrentStationIndex(stationIdx);
+    setTimeMode(data.time_mode || 'REALTIME');
+    setManualHour(data.manual_hour ?? 12);
+    setTotalPlayTimeSeconds(data.total_playtime_seconds || 0);
+    if (data.unlocked_weathers && data.unlocked_weathers.length > 0) {
+      setUnlockedWeathers(data.unlocked_weathers);
+    }
+    if (data.active_weather) {
+      setActiveWeather(data.active_weather);
+    }
+    if (data.weather_mode) {
+      setWeatherMode(data.weather_mode);
+    }
+    setStageStats(data.journey_stats);
+
+    const engCfg = ENGINE_CONFIGS[data.train_state.engine_level || 1];
+    const hullCfg = HULL_CONFIGS[data.train_state.hull_level || 1];
+
+    let weight = 20;
+    data.train_state.car_list.forEach((c) => {
+      const cfg = CAR_CONFIGS[c.car_type_id];
+      weight += cfg?.empty_weight_tons || 8;
+      if (c.cargo_inventory) {
+        Object.values(c.cargo_inventory).forEach((w) => {
+          weight += (Number(w) || 0) / 1000;
+        });
+      }
+    });
+
+    const currSt = stations[stationIdx] || stations[0];
+    const nxtSt = stations[stationIdx + 1] || stations[1] || currSt;
+    const distNext = Math.max(1, nxtSt.distance_from_start_km - currSt.distance_from_start_km);
+    const isFirstTime = (data.player_profile.trips_completed || 0) === 0;
+
+    setTrainState({
+      engine_level: data.train_state.engine_level || 1,
+      wheels_level: data.train_state.wheels_level || 1,
+      hull_level: data.train_state.hull_level || 1,
+      current_fuel: data.train_state.current_fuel ?? engCfg.max_fuel,
+      max_fuel: engCfg.max_fuel,
+      current_hp: data.train_state.current_hp ?? hullCfg.max_hp,
+      max_hp: hullCfg.max_hp,
+      speed_kmh: 0,
+      target_speed_kmh: 0,
+      throttle: 1.0,
+      car_list: data.train_state.car_list,
+      is_at_station: isFirstTime,
+      distance_to_next_station_km: distNext,
+      total_weight_tons: weight,
+    });
+  }, [stations]);
+
+  const handleNewGame = useCallback(() => {
+    const def = resetGameSave();
+    handleLoadSave(def);
+  }, [handleLoadSave]);
+
+  const handleStartGame = useCallback(() => {
+    setIsGameStarted(true);
+    if (playerProfile.trips_completed === 0 && trainState.is_at_station) {
+      setShowStationModal(true);
+    }
+  }, [playerProfile.trips_completed, trainState.is_at_station]);
+
+  const currentSaveData: SaveData = {
+    player_profile: {
+      ...playerProfile,
+      current_station_index: currentStationIndex,
+    },
+    train_state: {
+      engine_level: trainState.engine_level,
+      wheels_level: trainState.wheels_level,
+      hull_level: trainState.hull_level,
+      current_fuel: trainState.current_fuel,
+      current_hp: trainState.current_hp,
+      car_list: trainState.car_list,
+    },
+    current_station_id: currentStation.station_id,
+    journey_stats: stageStats,
+    time_mode: timeMode,
+    manual_hour: manualHour,
+    total_playtime_seconds: totalPlayTimeSeconds,
+    unlocked_weathers: unlockedWeathers,
+    active_weather: activeWeather,
+    weather_mode: weatherMode,
+  };
+
   const isAtInitialOrigin =
     playerProfile.trips_completed === 0 && trainState.distance_to_next_station_km === initialDistanceToNext;
 
+  // Background train presentation: when on StartScreen, keep train animated and running
+  const visualTrainState: TrainState = !isGameStarted
+    ? {
+        ...trainState,
+        speed_kmh: Math.max(38, trainState.speed_kmh),
+        throttle: 1.0,
+        is_at_station: false,
+      }
+    : trainState;
+
   return (
     <div className="relative w-screen h-screen flex flex-col bg-slate-950 text-slate-100 overflow-hidden font-sans">
-      {/* 1. TOP HUD (Header & Gauges) */}
-      <HUD
-        playerProfile={playerProfile}
-        trainState={trainState}
-        timeState={timeState}
-        currentStation={currentStation}
-        nextStation={nextStation}
-        totalCargoKg={totalCargoKg}
-        maxCargoCapacityKg={maxCargoCapacityKg}
-        totalPassengers={totalPassengers}
-        isMuted={isMuted}
-        onToggleMute={handleToggleMute}
-        onOpenCargo={() => setShowCargoSheet(true)}
-        onOpenTimeModal={() => setShowTimeModal(true)}
-        onOpenWeatherModal={() => setShowWeatherModal(true)}
-        onToggleThrottle={handleToggleThrottle}
-        onPullWhistle={handlePullWhistle}
-        onEmergencyCall={() => setShowEmergencyModal(true)}
-      />
+      {/* 1. TOP HUD (Header & Gauges) - Only visible when inside active game */}
+      {isGameStarted && (
+        <HUD
+          playerProfile={playerProfile}
+          trainState={trainState}
+          timeState={timeState}
+          currentStation={currentStation}
+          nextStation={nextStation}
+          totalCargoKg={totalCargoKg}
+          maxCargoCapacityKg={maxCargoCapacityKg}
+          totalPassengers={totalPassengers}
+          isMuted={isMuted}
+          onToggleMute={handleToggleMute}
+          onOpenCargo={() => setShowCargoSheet(true)}
+          onOpenTimeModal={() => setShowTimeModal(true)}
+          onOpenWeatherModal={() => setShowWeatherModal(true)}
+          onOpenSaveLoad={() => {
+            setSaveLoadInitialTab('SAVE');
+            setShowSaveLoadModal(true);
+          }}
+          onOpenSettings={() => setShowSettingsModal(true)}
+          onOpenMenu={() => setIsGameStarted(false)}
+          onToggleThrottle={handleToggleThrottle}
+          onPullWhistle={handlePullWhistle}
+          onEmergencyCall={() => setShowEmergencyModal(true)}
+        />
+      )}
 
       {/* 2. MAIN VIEWPORT: PARALLAX TRAIN CANVAS */}
       <main className="flex-1 relative w-full h-full min-h-0 overflow-hidden">
         <TrainCanvas
-          trainState={trainState}
+          trainState={visualTrainState}
           timeState={timeState}
           currentStation={currentStation}
           nextStation={nextStation}
@@ -751,8 +868,27 @@ export default function App() {
           onOpenWeatherModal={() => setShowWeatherModal(true)}
         />
 
+        {/* Start Screen Overlay (Title Screen) with Moving Train & Buttons Play, Save/Load, Settings */}
+        {!isGameStarted && (
+          <StartScreen
+            playerProfile={playerProfile}
+            trainState={trainState}
+            timeState={timeState}
+            currentStation={currentStation}
+            isMuted={isMuted}
+            onToggleMute={handleToggleMute}
+            onPlayGame={handleStartGame}
+            onOpenSaveLoad={() => {
+              setSaveLoadInitialTab('LOAD');
+              setShowSaveLoadModal(true);
+            }}
+            onOpenSettings={() => setShowSettingsModal(true)}
+            onNewGame={handleNewGame}
+          />
+        )}
+
         {/* Dynamic Weather Unlock Toast Banner */}
-        {weatherUnlockToast && (
+        {weatherUnlockToast && isGameStarted && (
           <div
             id="weather-unlock-toast"
             className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 border-2 border-amber-400/80 text-white px-5 py-3 rounded-2xl shadow-2xl backdrop-blur-md flex items-center gap-3.5 animate-bounce max-w-md pointer-events-auto"
@@ -783,8 +919,35 @@ export default function App() {
       </main>
 
       {/* 3. MODALS & POPUPS */}
-      {/* Station Modal */}
-      {showStationModal && (
+      {/* Save / Load Manager Modal */}
+      {showSaveLoadModal && (
+        <SaveLoadModal
+          isOpen={showSaveLoadModal}
+          currentSaveData={currentSaveData}
+          onLoadSave={handleLoadSave}
+          onClose={() => setShowSaveLoadModal(false)}
+          onNewGame={handleNewGame}
+          initialTab={saveLoadInitialTab}
+        />
+      )}
+
+      {/* Settings Modal */}
+      {showSettingsModal && (
+        <SettingsModal
+          isOpen={showSettingsModal}
+          timeState={timeState}
+          isMuted={isMuted}
+          onToggleMute={handleToggleMute}
+          onSetTimeMode={(mode) => setTimeMode(mode)}
+          onSetManualHour={(h) => setManualHour(h)}
+          onSelectWeather={(w) => setActiveWeather(w)}
+          onSetWeatherMode={(m) => setWeatherMode(m)}
+          onClose={() => setShowSettingsModal(false)}
+        />
+      )}
+
+      {/* Station Modal (Only when in game) */}
+      {isGameStarted && showStationModal && (
         <StationModal
           station={isAtInitialOrigin ? currentStation : nextStation}
           nextStation={isAtInitialOrigin ? nextStation : stations[currentStationIndex + 2] || nextStation}
@@ -802,7 +965,7 @@ export default function App() {
       )}
 
       {/* Cargo Inspection Sheet Drawer */}
-      {showCargoSheet && (
+      {isGameStarted && showCargoSheet && (
         <CargoSheet
           trainState={trainState}
           onClose={() => setShowCargoSheet(false)}
@@ -834,7 +997,7 @@ export default function App() {
       )}
 
       {/* Emergency Breakdown / Rescue Modal */}
-      {showEmergencyModal && (
+      {isGameStarted && showEmergencyModal && (
         <EmergencyModal
           trainState={trainState}
           playerProfile={playerProfile}

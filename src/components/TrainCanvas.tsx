@@ -1358,16 +1358,9 @@ function drawTrainComposition(
   drawLocomotive(ctx, locX, trainY, trainState, wheelRotation, rodAngle, timeState);
 
   // -----------------------------------------------------------------
-  // 2. COAL TENDER WAGON (Tied right behind locomotive)
+  // 2. SPECIALIZED CARRIAGES (Only cars in player's train car_list)
   // -----------------------------------------------------------------
-  const tenderX = locX - carWidth - 6;
-  drawCoalTender(ctx, tenderX, trainY, wheelRotation);
-  drawCoupler(ctx, tenderX + carWidth, locX, trainY);
-
-  // -----------------------------------------------------------------
-  // 3. SPECIALIZED CARRIAGES (Greenhouse, Barn, Storage, Passenger)
-  // -----------------------------------------------------------------
-  let currentCarX = tenderX;
+  let currentCarX = locX;
 
   trainState.car_list.forEach((car, index) => {
     const nextCarX = currentCarX - carWidth - carSpacing;

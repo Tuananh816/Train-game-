@@ -81,12 +81,19 @@ export const StationModal: React.FC<StationModalProps> = ({
     }
   });
 
-  // Calculate produce revenue
+  // Check if player has any produce/agricultural or cargo storage car
+  const hasProduceCars = trainState.car_list.some(
+    (car) => CAR_CONFIGS[car.car_type_id]?.category === 'PRODUCE_STORAGE'
+  );
+
+  // Calculate produce revenue (only applies if train has produce cars)
   let produceRevenue = 0;
-  Object.entries(inventoryItems).forEach(([itemId, amount]) => {
-    const unitPrice = station.market_prices[itemId] || ITEMS[itemId]?.base_price || 5;
-    produceRevenue += amount * unitPrice;
-  });
+  if (hasProduceCars) {
+    Object.entries(inventoryItems).forEach(([itemId, amount]) => {
+      const unitPrice = station.market_prices[itemId] || ITEMS[itemId]?.base_price || 5;
+      produceRevenue += amount * unitPrice;
+    });
+  }
 
   // Calculate passenger fare revenue
   const passengerTicketPrice = station.market_prices['passenger_ticket'] || 15;
@@ -245,7 +252,7 @@ export const StationModal: React.FC<StationModalProps> = ({
             }`}
           >
             <Store className="w-4 h-4" />
-            <span>1. Bán Hàng & Báo Cáo</span>
+            <span>{hasProduceCars ? '1. Bán Nông Sản & Báo Cáo' : '1. Doanh Thu & Báo Cáo'}</span>
             {!tradeClaimed && totalStageRevenue > 0 && (
               <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
             )}
@@ -352,30 +359,32 @@ export const StationModal: React.FC<StationModalProps> = ({
                     </div>
                   )}
 
-                  {/* Cargo Items Sold */}
-                  {Object.entries(inventoryItems).length > 0 ? (
-                    Object.entries(inventoryItems).map(([itemId, amount]) => {
-                      const item = ITEMS[itemId];
-                      const unitPrice = station.market_prices[itemId] || item?.base_price || 5;
-                      const subtotal = amount * unitPrice;
-                      return (
-                        <div
-                          key={itemId}
-                          className="flex items-center justify-between bg-slate-900/60 p-2.5 rounded-lg border border-slate-800"
-                        >
-                          <div className="flex items-center gap-2 text-slate-300">
-                            <span>{item?.icon || '📦'} {item?.name || itemId}: {amount.toFixed(1)} {item?.unit || 'kg'} × {unitPrice} Gold</span>
+                  {/* Cargo Items Sold (Only displayed if train has produce cars) */}
+                  {hasProduceCars && (
+                    Object.entries(inventoryItems).length > 0 ? (
+                      Object.entries(inventoryItems).map(([itemId, amount]) => {
+                        const item = ITEMS[itemId];
+                        const unitPrice = station.market_prices[itemId] || item?.base_price || 5;
+                        const subtotal = amount * unitPrice;
+                        return (
+                          <div
+                            key={itemId}
+                            className="flex items-center justify-between bg-slate-900/60 p-2.5 rounded-lg border border-slate-800"
+                          >
+                            <div className="flex items-center gap-2 text-slate-300">
+                              <span>{item?.icon || '📦'} {item?.name || itemId}: {amount.toFixed(1)} {item?.unit || 'kg'} × {unitPrice} Gold</span>
+                            </div>
+                            <span className="font-mono font-bold text-emerald-400">
+                              +{subtotal.toFixed(0)} Gold
+                            </span>
                           </div>
-                          <span className="font-mono font-bold text-emerald-400">
-                            +{subtotal.toFixed(0)} Gold
-                          </span>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="text-xs text-slate-500 italic p-2">
-                      (Không có nông sản tồn trong toa kho hàng)
-                    </div>
+                        );
+                      })
+                    ) : (
+                      <div className="text-xs text-slate-500 italic p-2">
+                        (Chưa có nông sản thu hoạch tồn trong kho)
+                      </div>
+                    )
                   )}
 
                   {/* Total Summary */}
@@ -396,7 +405,11 @@ export const StationModal: React.FC<StationModalProps> = ({
                       className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-400 hover:to-amber-500 text-slate-950 font-extrabold text-base py-3 px-6 rounded-xl shadow-lg transition active:scale-98 cursor-pointer"
                     >
                       <Coins className="w-5 h-5" />
-                      <span>Bán Nông Sản & Nhận Tiền Vé (+{totalStageRevenue} Gold)</span>
+                      <span>
+                        {hasProduceCars
+                          ? `Bán Nông Sản & Nhận Tiền Vé (+${totalStageRevenue} Gold)`
+                          : `Nhận Tiền Vé Hành Khách & Tiền Chặng (+${totalStageRevenue} Gold)`}
+                      </span>
                     </button>
                   ) : (
                     <div className="flex items-center justify-center gap-2 bg-emerald-950/70 border border-emerald-500/40 text-emerald-300 py-3 px-4 rounded-xl text-sm font-semibold">
@@ -407,32 +420,36 @@ export const StationModal: React.FC<StationModalProps> = ({
                 </div>
               </div>
 
-              {/* Station Market Price Board */}
-              <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-4">
-                <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
-                  Bảng Giá Nông Sản & Hàng Hóa Niêm Yết Tại {station.station_name}
-                </h4>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                  {Object.entries(station.market_prices).map(([itemId, price]) => {
-                    const item = ITEMS[itemId];
-                    return (
-                      <div
-                        key={itemId}
-                        className="bg-slate-900/80 border border-slate-700/70 p-2.5 rounded-lg flex flex-col gap-1"
-                      >
-                        <div className="flex items-center gap-1.5 text-xs text-slate-300">
-                          <span>{item?.icon || '📦'}</span>
-                          <span className="truncate">{item?.name || itemId}</span>
-                        </div>
-                        <div className="flex items-baseline justify-between font-mono">
-                          <span className="text-base font-bold text-amber-300">{price}</span>
-                          <span className="text-[10px] text-slate-400">Gold/{item?.unit || 'đơn vị'}</span>
-                        </div>
-                      </div>
-                    );
-                  })}
+              {/* Station Market Price Board (Only displayed if train has produce cars) */}
+              {hasProduceCars && (
+                <div className="bg-slate-800/40 border border-slate-700/50 rounded-xl p-4 animate-in fade-in duration-200">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">
+                    Bảng Giá Nông Sản & Hàng Hóa Niêm Yết Tại {station.station_name}
+                  </h4>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                    {Object.entries(station.market_prices)
+                      .filter(([itemId]) => itemId !== 'passenger_ticket')
+                      .map(([itemId, price]) => {
+                        const item = ITEMS[itemId];
+                        return (
+                          <div
+                            key={itemId}
+                            className="bg-slate-900/80 border border-slate-700/70 p-2.5 rounded-lg flex flex-col gap-1"
+                          >
+                            <div className="flex items-center gap-1.5 text-xs text-slate-300">
+                              <span>{item?.icon || '📦'}</span>
+                              <span className="truncate">{item?.name || itemId}</span>
+                            </div>
+                            <div className="flex items-baseline justify-between font-mono">
+                              <span className="text-base font-bold text-amber-300">{price}</span>
+                              <span className="text-[10px] text-slate-400">Gold/{item?.unit || 'đơn vị'}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           )}
 

@@ -63,46 +63,55 @@ export const CargoSheet: React.FC<CargoSheetProps> = ({ trainState, onClose }) =
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-5 text-sm">
           {/* Storage Capacity Gauge */}
-          <div className="bg-slate-800/60 border border-slate-700/70 p-4 rounded-xl space-y-2">
-            <div className="flex justify-between items-center text-xs">
-              <span className="font-bold text-slate-300">Tổng Dung Lượng Kho Chứa Hàng Hóa:</span>
-              <span className="font-mono font-bold text-amber-300">
-                {currentStorageWeight.toFixed(1)} / {totalStorageCap} kg
-              </span>
+          {totalStorageCap > 0 ? (
+            <div className="bg-slate-800/60 border border-slate-700/70 p-4 rounded-xl space-y-2">
+              <div className="flex justify-between items-center text-xs">
+                <span className="font-bold text-slate-300">Tổng Dung Lượng Kho Chứa Hàng Hóa:</span>
+                <span className="font-mono font-bold text-amber-300">
+                  {currentStorageWeight.toFixed(1)} / {totalStorageCap} kg
+                </span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+                <div
+                  className="h-full bg-amber-500 rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min(100, (currentStorageWeight / totalStorageCap) * 100)}%` }}
+                />
+              </div>
             </div>
-            <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
-              <div
-                className="h-full bg-amber-500 rounded-full transition-all duration-300"
-                style={{ width: `${totalStorageCap > 0 ? Math.min(100, (currentStorageWeight / totalStorageCap) * 100) : 0}%` }}
-              />
+          ) : (
+            <div className="bg-slate-800/30 border border-dashed border-slate-700/60 p-3.5 rounded-xl text-xs text-slate-400 flex items-center gap-2.5">
+              <Package className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>Đoàn tàu hiện chưa gắn Toa Kho Hàng hoặc Toa Nông Sản. Hãy nâng cấp mua thêm toa tại Xưởng Nâng Cấp ở sân ga.</span>
             </div>
-          </div>
+          )}
 
           {/* Current Cargo Breakdown */}
-          <div>
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2.5">
-              Hàng Hóa Hiện Có Trong Kho
-            </h4>
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              {Object.entries(ITEMS).map(([itemId, item]) => {
-                const amount = totalInventory[itemId] || 0;
-                return (
-                  <div
-                    key={itemId}
-                    className="bg-slate-800/40 border border-slate-700/60 p-3 rounded-xl flex items-center gap-3"
-                  >
-                    <div className="text-2xl">{item.icon}</div>
-                    <div className="flex flex-col">
-                      <span className="text-xs text-slate-300 font-medium">{item.name}</span>
-                      <span className="font-mono font-bold text-amber-300 text-sm">
-                        {amount.toFixed(1)} <span className="text-[10px] text-slate-400 font-normal">{item.unit}</span>
-                      </span>
+          {totalStorageCap > 0 && (
+            <div>
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2.5">
+                Hàng Hóa Hiện Có Trong Kho
+              </h4>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                {Object.entries(ITEMS).map(([itemId, item]) => {
+                  const amount = totalInventory[itemId] || 0;
+                  return (
+                    <div
+                      key={itemId}
+                      className="bg-slate-800/40 border border-slate-700/60 p-3 rounded-xl flex items-center gap-3"
+                    >
+                      <div className="text-2xl">{item.icon}</div>
+                      <div className="flex flex-col">
+                        <span className="text-xs text-slate-300 font-medium">{item.name}</span>
+                        <span className="font-mono font-bold text-amber-300 text-sm">
+                          {amount.toFixed(1)} <span className="text-[10px] text-slate-400 font-normal">{item.unit}</span>
+                        </span>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           {/* Passenger Status */}
           {maxPassengerCapacity > 0 && (

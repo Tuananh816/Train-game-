@@ -1,6 +1,22 @@
 import React from 'react';
 import { TrainState, PlayerProfile, TimeState, Station } from '../types';
-import { Volume2, VolumeX, Clock, Fuel, Shield, Coins, Gauge, Package, Bell, Play, Pause, AlertTriangle } from 'lucide-react';
+import {
+  Volume2,
+  VolumeX,
+  Clock,
+  Fuel,
+  Shield,
+  Coins,
+  Gauge,
+  Package,
+  Bell,
+  Play,
+  Pause,
+  AlertTriangle,
+  FolderOpen,
+  Settings as SettingsIcon,
+  Home,
+} from 'lucide-react';
 import { audioSynthesizer } from '../utils/audioSynthesizer';
 
 interface HUDProps {
@@ -17,6 +33,9 @@ interface HUDProps {
   onOpenCargo: () => void;
   onOpenTimeModal: () => void;
   onOpenWeatherModal: () => void;
+  onOpenSaveLoad: () => void;
+  onOpenSettings: () => void;
+  onOpenMenu: () => void;
   onToggleThrottle: () => void;
   onPullWhistle: () => void;
   onEmergencyCall: () => void;
@@ -36,6 +55,9 @@ export const HUD: React.FC<HUDProps> = ({
   onOpenCargo,
   onOpenTimeModal,
   onOpenWeatherModal,
+  onOpenSaveLoad,
+  onOpenSettings,
+  onOpenMenu,
   onToggleThrottle,
   onPullWhistle,
   onEmergencyCall,
@@ -145,10 +167,16 @@ export const HUD: React.FC<HUDProps> = ({
             title="Xem kho hàng & kiểm tra tiến độ sản xuất"
           >
             <Package className="w-3.5 h-3.5 text-amber-400" />
-            <span className="hidden md:inline">Kho:</span>
-            <span className="font-mono text-amber-300 font-bold">
-              {totalCargoKg.toFixed(0)}/{maxCargoCapacityKg}kg
-            </span>
+            {maxCargoCapacityKg > 0 ? (
+              <>
+                <span className="hidden md:inline">Kho:</span>
+                <span className="font-mono text-amber-300 font-bold">
+                  {totalCargoKg.toFixed(0)}/{maxCargoCapacityKg}kg
+                </span>
+              </>
+            ) : (
+              <span className="text-slate-300">Toa Tàu</span>
+            )}
             {totalPassengers > 0 && (
               <span className="ml-1 px-1.5 py-0.2 bg-blue-900/70 border border-blue-600/50 rounded-md text-[10px] text-blue-300 font-mono">
                 👥 {totalPassengers}
@@ -230,6 +258,38 @@ export const HUD: React.FC<HUDProps> = ({
             title={isMuted ? 'Bật âm thanh hiệu ứng' : 'Tắt âm thanh'}
           >
             {isMuted ? <VolumeX className="w-4 h-4 text-rose-400" /> : <Volume2 className="w-4 h-4 text-emerald-400" />}
+          </button>
+
+          {/* Quick Save/Load Button */}
+          <button
+            id="hud-save-load-btn"
+            onClick={onOpenSaveLoad}
+            className="flex items-center gap-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-amber-500/50 text-slate-200 hover:text-amber-300 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition active:scale-95 cursor-pointer"
+            title="Mở quản lý Lưu & Tải game (Save / Load)"
+          >
+            <FolderOpen className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden xl:inline">Save/Load</span>
+          </button>
+
+          {/* Settings Button */}
+          <button
+            id="hud-settings-btn"
+            onClick={onOpenSettings}
+            className="p-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 hover:border-amber-500/50 text-slate-300 hover:text-amber-300 rounded-lg transition active:scale-95 cursor-pointer"
+            title="Cài đặt âm thanh, thời gian & thời tiết"
+          >
+            <SettingsIcon className="w-4 h-4" />
+          </button>
+
+          {/* Title Screen / Main Menu Button */}
+          <button
+            id="hud-main-menu-btn"
+            onClick={onOpenMenu}
+            className="flex items-center gap-1 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 px-2.5 py-1.5 rounded-lg text-xs font-bold transition active:scale-95 cursor-pointer"
+            title="Quay lại Màn hình Mở Đầu (Title Screen)"
+          >
+            <Home className="w-3.5 h-3.5 text-amber-400" />
+            <span className="hidden sm:inline">Menu</span>
           </button>
 
           {/* Throttle Play / Pause button */}
